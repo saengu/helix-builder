@@ -9,7 +9,7 @@ on:
         required: false
         type: string
   schedule:
-    - cron: '0 6 * * *'   # Daily at 06:00 UTC
+    - cron: '0 6 1 * *'   # Monthly at 06:00 UTC on the 1st
 
 env:
   HELIX_REPO: helix-editor/helix
