@@ -1,0 +1,91 @@
+name: Build Helix DEB
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Helix git ref (tag/branch/commit)'
+        default: 'master'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
+
+env:
+  HELIX_REPO: helix-editor/helix
+
+jobs:
+  build-deb:
+    name: Build .deb (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout Helix source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.HELIX_REPO }}
+          ref: ${{ inputs.ref || 'master' }}
+
+      - name: Get version info
+        id: version
+        run: |
+          echo "version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = \"\(.*\)\"/\1/p;}' Cargo.toml)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Remove rust-toolchain.toml
+        run: rm -f rust-toolchain.toml
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Fetch tree-sitter grammars
+        run: cargo run --package=helix-loader --bin=hx-loader
+
+      - name: Build release binary
+        run: cargo build --profile opt --locked --target ${{ matrix.target }}
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419
+        with:
+          tool: cargo-deb
+
+      - name: Build .deb package
+        run: |
+          mkdir -p target/release
+          cp "target/${{ matrix.target }}/opt/hx" target/release/
+          cargo deb --no-build
+
+      - name: Rename and collect artifacts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DATE="${{ steps.version.outputs.date }}"
+          SHA="${{ steps.version.outputs.sha }}"
+          mkdir -p dist
+          for f in target/debian/*.deb; do
+            newname="helix_${VERSION}+dev.${DATE}.${SHA}_${{ matrix.arch }}.deb"
+            cp "$f" "dist/${newname}"
+          done
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: helix-deb-${{ matrix.arch }}
+          path: dist/*.deb
