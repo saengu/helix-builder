@@ -11,9 +11,6 @@ on:
   schedule:
     - cron: '0 6 1 * *'   # Monthly at 06:00 UTC on the 1st
 
-env:
-  HELIX_REPO: helix-editor/helix
-
 jobs:
   build-deb:
     name: Build .deb (${{ matrix.arch }})
@@ -33,7 +30,7 @@ jobs:
       - name: Checkout Helix source
         uses: actions/checkout@v7
         with:
-          repository: ${{ env.HELIX_REPO }}
+          repository: helix-editor/helix
           ref: ${{ inputs.ref || 'master' }}
 
       - name: Get version info
@@ -63,9 +60,7 @@ jobs:
         run: cargo build --profile opt --locked --target ${{ matrix.target }}
 
       - name: Install cargo-deb
-        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419
-        with:
-          tool: cargo-deb
+        run: cargo install cargo-deb
 
       - name: Build .deb package
         run: |
@@ -84,7 +79,7 @@ jobs:
           mkdir -p dist
           for f in target/debian/*.deb; do
             newname="helix_${VERSION}+dev.${DATE}.${SHA}_${{ matrix.arch }}.deb"
-            cp "$f" "dist/${newname}"
+            mv "$f" "dist/${newname}"
           done
 
       - name: Upload .deb artifact
@@ -105,11 +100,23 @@ jobs:
           pattern: helix-deb-*
           merge-multiple: true
 
+      - name: Extract version info from artifacts
+        id: version
+        run: |
+          DEB_FILE=$(ls *.deb | head -1)
+          # helix_25.7.1+dev.20240724.a1b2c3d4_amd64.deb
+          VERSION=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\1/')
+          DATE=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\2/')
+          SHA=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\3/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: monthly-${{ github.run_id }}
-          name: Monthly Build ${{ github.run_id }}
+          tag_name: build-${{ steps.version.outputs.date }}-${{ steps.version.outputs.sha }}
+          name: Helix ${{ steps.version.outputs.version }}+dev (${{ steps.version.outputs.date }})
           body: |
             Auto-built from [helix-editor/helix](https://github.com/helix-editor/helix) @ master.
             Triggered by: ${{ github.event_name }}
