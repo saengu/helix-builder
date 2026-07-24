@@ -121,7 +121,7 @@ jobs:
           PART2=$(echo "$BASE" | sed 's/.*+dev\.\(.*\)/\1/')
           echo "version=$(echo "$BASE" | sed 's/helix_\(.*\)+dev\..*/\1/')" >> "$GITHUB_OUTPUT"
           echo "date=$(echo "$PART2" | cut -d'.' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha=$(echo "$PART2" | cut -d'.' -f2)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$PART2" | cut -d'.' -f2 | sed 's/_.*$//')" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
