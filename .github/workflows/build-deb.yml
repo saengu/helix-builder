@@ -1,4 +1,4 @@
-name: Build Helix DEB
+name: Build Helix
 
 on:
   workflow_dispatch:
@@ -12,18 +12,24 @@ on:
     - cron: '0 6 1 * *'   # Monthly at 06:00 UTC on the 1st
 
 jobs:
-  build-deb:
-    name: Build .deb (${{ matrix.arch }})
+  build:
+    name: Build (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - arch: linux-amd64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - arch: arm64
+            build_deb: true
+          - arch: linux-arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            build_deb: true
+          - arch: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            build_deb: false
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -59,58 +65,63 @@ jobs:
       - name: Build release binary
         run: cargo build --profile opt --locked --target ${{ matrix.target }}
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
-
       - name: Build .deb package
+        if: matrix.build_deb
         run: |
+          cargo install cargo-deb
           mkdir -p target/release
           cp "target/${{ matrix.target }}/opt/hx" target/release/
-          # Pin explicit dependencies to suppress dpkg-shlibdeps warnings
-          # for grammar .so files. hx on Linux only needs libc.
           sed -i '/^\[package.metadata.deb\]/a depends = "libc6"' helix-term/Cargo.toml
           cargo deb --no-build
+          mkdir -p dist
+          for f in target/debian/*.deb; do
+            newname="helix_${{ steps.version.outputs.version }}+dev.${{ steps.version.outputs.date }}.${{ steps.version.outputs.sha }}_${{ matrix.arch }}.deb"
+            mv "$f" "dist/${newname}"
+          done
 
-      - name: Rename and collect artifacts
+      - name: Create .tar.gz archive
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           DATE="${{ steps.version.outputs.date }}"
           SHA="${{ steps.version.outputs.sha }}"
-          mkdir -p dist
-          for f in target/debian/*.deb; do
-            newname="helix_${VERSION}+dev.${DATE}.${SHA}_${{ matrix.arch }}.deb"
-            mv "$f" "dist/${newname}"
-          done
+          PKG_NAME="helix_${VERSION}+dev.${DATE}.${SHA}_${{ matrix.arch }}"
+          mkdir -p "${PKG_NAME}" dist
+          cp "target/${{ matrix.target }}/opt/hx" "${PKG_NAME}/"
+          chmod +x "${PKG_NAME}/hx"
+          rm -rf runtime/grammars/sources
+          cp -r runtime "${PKG_NAME}/"
+          cp LICENSE README.md "${PKG_NAME}/"
+          mkdir -p "${PKG_NAME}/contrib"
+          cp -r contrib/completion "${PKG_NAME}/contrib/"
+          tar czf "dist/${PKG_NAME}.tar.gz" "${PKG_NAME}"
 
-      - name: Upload .deb artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: helix-deb-${{ matrix.arch }}
-          path: dist/*.deb
+          name: build-${{ matrix.arch }}
+          path: dist/*
 
   release:
     name: Create Release
-    needs: [build-deb]
+    needs: [build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: helix-deb-*
+          pattern: build-*
           merge-multiple: true
 
       - name: Extract version info from artifacts
         id: version
         run: |
-          DEB_FILE=$(ls *.deb | head -1)
-          # helix_25.7.1+dev.20240724.a1b2c3d4_amd64.deb
-          VERSION=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\1/')
-          DATE=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\2/')
-          SHA=$(echo "$DEB_FILE" | sed 's/helix_\(.*\)+dev\.\(.*\)\.\(.*\)_\(.*\)\.deb/\3/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          FILE=$(ls helix_* 2>/dev/null | head -1)
+          BASE=$(echo "$FILE" | sed -E 's/\.(deb|tar\.gz)$//')
+          PART2=$(echo "$BASE" | sed 's/.*+dev\.\(.*\)/\1/')
+          echo "version=$(echo "$BASE" | sed 's/helix_\(.*\)+dev\..*/\1/')" >> "$GITHUB_OUTPUT"
+          echo "date=$(echo "$PART2" | cut -d'.' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$PART2" | cut -d'.' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -122,6 +133,7 @@ jobs:
             Triggered by: ${{ github.event_name }}
           files: |
             *.deb
+            *.tar.gz
           draft: false
           prerelease: true
           make_latest: false
